@@ -3,6 +3,11 @@ import scrapy
 import json
 import os
 
+import requests
+
+from crypto.Cipher import AES
+from binascii import b2a_hex, a2b_hex
+
 
 class Course11Spider(scrapy.Spider):
     name = 'course_11'
@@ -41,21 +46,78 @@ class Course11Spider(scrapy.Spider):
         pass
 
     def parse_task(self, response):
-        playlist_url = response.xpath('//div[@id="lesson-video-content"]/@data-url').extract()
-        access_key = response.xpath('//div[@id="lesson-video-content"]/@data-access-key').extract()
-        print(playlist_url)
+        playlist_url = response.xpath('//div[@id="lesson-video-content"]/@data-url').extract_first()
+        access_key = response.xpath('//div[@id="lesson-video-content"]/@data-access-key').extract_first()
+        # print(playlist_url)
         yield scrapy.Request(
             playlist_url,
-            callback=self.parse_playlist,
+            callback=self.parse_play_list,
             cookies=self.cookies_dict
         )
         pass
 
-    def parse_playlist(self, response):
+    def parse_play_list(self, response):
         # Maybe need decrypt
-        playList = response.text
-        print(playList)
+        play_list = response.text
+        if "#EXTM3U" not in play_list:
+            raise BaseException("非M3U8的链接")
+
+        if "EXT-X-STREAM-INF" in play_list:  # 第一层
+            file_line = play_list.split("\n")
+            stream_url = file_line[-1]
+            if '.m3u8' in stream_url :
+                yield scrapy.Request(
+                    stream_url,
+                    callback=self.parse_stream_list,
+                    cookies=self.cookies_dict
+                )
+            else:
+                print("stream_url 无效", stream_url)
         pass
+
+    def parse_stream_list (self, response):
+        stream_list = response.text
+        print(stream_list)
+        file_line = stream_list.split("\n")
+        key = ""
+        iv = ""
+        for index, line in enumerate(stream_list):  # 第二层
+            if "#EXT-X-KEY" in line:
+                # 找解密Key
+                if key == "":
+                    method_pos = line.find("METHOD")
+                    comma_pos = line.find(",")
+                    method = line[method_pos:comma_pos].split('=')[1]
+                    print("Decode Method：", method)
+
+                    uri_pos = line.find("URI")
+                    quotation_mark_pos = line.rfind('"')
+                    # 拼出key解密密钥URL
+                    key_url = line[uri_pos:quotation_mark_pos].split('"')[1]
+                    res = requests.get(key_url)
+                    key = res.content
+                    print("key：", key)
+
+                iv_pos = line.find("IV")
+                iv = line[iv_pos + 5:]
+
+            if "EXTINF" in line:  # 找ts地址并下载
+                pd_url = file_line[index + 1]  # 拼出ts片段的URL
+                print (pd_url)
+
+                # res = requests.get(pd_url)
+                # c_fule_name = file_line[index + 1].rsplit("/", 1)[-1]
+                #
+                # if len(key):  # AES 解密
+                #     cryptor = AES.new(a2b_hex(key), AES.MODE_CBC, iv)
+                #     with open(os.path.join(download_path, c_fule_name + ".mp4"), 'ab') as f:
+                #         f.write(cryptor.decrypt(res.content))
+                # else:
+                #     with open(os.path.join(download_path, c_fule_name), 'ab') as f:
+                #         f.write(res.content)
+                #         f.flush()
+        pass
+
 
 
 
